@@ -1,0 +1,10 @@
+pandas
+opencv-python
+torch
+torchvision
+httplib2
+requests
+json
+sklearn
+matplotlib
+tqdm
