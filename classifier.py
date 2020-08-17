@@ -181,7 +181,7 @@ def main():
         'lr': 0.001,
         'n_epochs': 5,
         'threshold': 10,
-        'test_size': 0.7
+        'test_size': 0.1
     }
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
