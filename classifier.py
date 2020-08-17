@@ -43,8 +43,11 @@ def build_split(labels_path, threshold=10, test_size=0.1):
     labels = labels[mask]
     labels_frame = labels_frame[mask]
 
-    X_train, X_test, y_train, y_test = train_test_split(labels_frame, labels_frame['subject'], 
-        stratify=labels_frame['subject'], test_size=test_size)
+    X_train, X_test, y_train, y_test = train_test_split(labels_frame, labels, 
+        stratify=labels, test_size=test_size)
+
+    X_train['subject'] = y_train
+    X_test['subject'] = y_test
     
     return X_train, X_test, dict(zip(labels_frame['subject'], labels))
 
@@ -61,10 +64,9 @@ class SubjectsDataset(Dataset):
         """
         self.image_path = image_path
         self.transform = transform
-        
-        le = LabelEncoder()
+    
         labels_frame = dataframe
-        labels = le.fit_transform(dataframe['subject'])
+        labels = dataframe['subject']
         nm = dataframe['nmid'].map(int).tolist()
         vals = dict(zip(nm, labels))
 
@@ -249,3 +251,4 @@ def main():
     plt.grid(True)
     plt.show()
 
+main()
