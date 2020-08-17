@@ -14,26 +14,58 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from collections import defaultdict
 import matplotlib.pyplot as plt
 import cv2
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+
+
+def build_split(labels_path, threshold=10, test_size=0.1):
+    """
+    Создает 2 csv файла, содержащих nmid и лейблы поспличенного csv файла, содержащего все изображения и лейблы. 
+    Такое разделение нужно для того, чтобы сохранялся баланс классов между трейном и валидацией
+
+    Args:
+        labels_path: Путь до дирректории, созданной при скачивании изображений в файле downloader.py
+        threshold: Убирает из выборки классы, где счетчик объектов данных классов меньше порога
+        test_size: Размер тестовой выборки
+
+    Returns:
+        X_train: Pandas DataFrame - тренировочный датафрейм
+        X_test: Pandas DataFrame - валидационный датафрейм
+        dict(str, int) - словарь, где ключ: название класса, а значение: закодированный номер класса
+    """
+
+    
+    le = LabelEncoder()
+    labels_frame = pd.read_csv(labels_path)
+    labels = pd.Series(le.fit_transform(labels_frame['subject']))
+    mask = labels.map(labels.value_counts()) > threshold
+    labels = labels[mask]
+    labels_frame = labels_frame[mask]
+
+    X_train, X_test, y_train, y_test = train_test_split(labels_frame, labels_frame['subject'], 
+        stratify=labels_frame['subject'], test_size=test_size)
+    
+    return X_train, X_test, dict(zip(labels_frame['subject'], labels))
 
 
 
 class SubjectsDataset(Dataset):
 
-    def __init__(self, image_path, labels_path, transform=None):
+    def __init__(self, image_path, dataframe, transform=None):
         """
         Args:
             image_path: Путь до папки с изображениями
-            labels_path: Путь до csv файла с метками
+            dataframe: Pandas DataFrame, содержащий nmid и имена классов
             transform(опционально): трансформации, которые будут проводиться с изображением
         """
         self.image_path = image_path
-        self.labels_path = labels_path
         self.transform = transform
         
         le = LabelEncoder()
-        labels_frame = pd.read_csv(self.labels_path)
-        labels = le.fit_transform(labels_frame['subject'])
-        nm = labels_frame['nmid'].map(int).tolist()
+        labels_frame = dataframe
+        labels = le.fit_transform(dataframe['subject'])
+        nm = dataframe['nmid'].map(int).tolist()
         vals = dict(zip(nm, labels))
 
         dataset = dict()
@@ -52,7 +84,9 @@ class SubjectsDataset(Dataset):
         img_name = self.keys[idx]
         image = cv2.cvtColor(
                             cv2.imread(
-                                    os.path.join(self.image_path, img_name)
+                                    os.path.join(
+                                        self.image_path, img_name
+                                    )
                             ),
                             cv2.COLOR_BGR2RGB
                 )
@@ -60,10 +94,10 @@ class SubjectsDataset(Dataset):
 
         if self.transform:
             sample = {'image': self.transform(image),
-                      'label': label            
+                      'label': torch.from_numpy(np.array(label))            
             }
         else:
-            sample = {'image': torch.Tensor(image), 'label': label}
+            sample = {'image': torch.Tensor(image), 'label': torch.from_numpy(np.array(label))}
         
         return sample
 
@@ -91,9 +125,9 @@ class ConvNet(nn.Module):
 def train_loop(model, train_loader, optimizer, loss_fn, batch_size, device):
     model = model.train()
     train_loss = 0.0
-    for i, data in tqdm(enumerate(train_loader, 0), desc='train'):
+    for i, data in tqdm(enumerate(train_loader), desc='train loop'):
         images, labels = data['image'], data['label']
-        images, labels = images.to(device), labels.to(device)
+        images, labels = images.to(device), labels.type(torch.long).to(device)
         optimizer.zero_grad()
         outputs = model(images)
         loss = loss_fn(outputs, labels)
@@ -105,41 +139,49 @@ def train_loop(model, train_loader, optimizer, loss_fn, batch_size, device):
 def eval_loop(model, val_loader, loss_fn, batch_size, device):
     model = model.eval()
     eval_loss = 0.0
-    for i, data in tqdm(enumerate(val_loader, 0), desc='validation'):
+    for i, data in tqdm(enumerate(val_loader), desc='eval loop'):
         images, labels = data['image'], data['label']
-        outputs = model(images.to(device))
-        loss = loss_fn(outputs.to(device), labels.to(device))
+        images, labels = images.to(device), labels.type(torch.long).to(device)
+        outputs = model(images)
+        loss = loss_fn(outputs, labels)
         eval_loss += loss.item()
     return eval_loss / batch_size
 
-def full_train(model, train_loader, val_loader, optimizer, loss_fn, n_epochs, batch_size, device):
-    logs = defaultdict()
+def full_train(model, train_loader, val_loader, optimizer, loss_fn, n_epochs, batch_size, device, save_path):
+    train_losses, eval_losses = [], []
     best_eval_loss = 100000000000
-    for _ in range(n_epochs):
+    for _ in tqdm(range(n_epochs), desc='full_train'):
         train_loss = train_loop(model, train_loader, optimizer, loss_fn, batch_size, device)
         eval_loss = eval_loop(model, val_loader, loss_fn, batch_size, device)
+
+        print("-----------------")
+        print(train_loss)
+        print(eval_loss)
+        print("-----------------")
         
         if eval_loss < best_eval_loss:
-            torch.save(model.state_dict())
+            torch.save(model.state_dict(), save_path)
             best_eval_loss = eval_loss
 
-        logs['train_loss'].append(train_loss)
-        logs['eval_loss'].append(eval_loss)
+        train_losses.append(train_loss)
+        eval_losses.append(eval_loss)
     
-    return model, logs
+    return model, train_losses, eval_losses
 
 
 def main():
     paths = {
         'image_path': r'C:\Users\Buc.Nikita\Desktop\wb_images\data',
-        'desc_path': r'C:\Users\Buc.Nikita\Desktop\wb_images\files_description.csv'
+        'desc_path': r'C:\Users\Buc.Nikita\Desktop\wb_images\files_description.csv',
+        'save_path': r'trained_subject_model.pth'
     }
 
     params = {
-        'n_classes': 10,
-        'batch_size': 64,
+        'batch_size': 128,
         'lr': 0.001,
-        'n_epochs': 5
+        'n_epochs': 5,
+        'threshold': 10,
+        'test_size': 0.7
     }
 
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -152,28 +194,58 @@ def main():
                             ),
             transforms.ToPILImage(),
             #transforms.Grayscale(1),
+            transforms.Resize((32, 32)),
             transforms.ToTensor()
         ]    
     )
 
-    subject_dataset = SubjectsDataset(
+    train_df, test_df, class_names = build_split(
+        labels_path=paths['desc_path'], 
+        threshold=params['threshold'], 
+        test_size=params['test_size']
+    )
+
+    n_classes = len(class_names)
+
+    print(f'number of classes: {n_classes}')
+
+    train_subject_dataset = SubjectsDataset(
         image_path=paths['image_path'],
-        labels_path=paths['desc_path'],
+        dataframe=train_df,
         transform=transform
     )
 
-    data_loader = DataLoader(subject_dataset, batch_size=params['batch_size'],
-                            shuffle=True)
+    test_subject_dataset = SubjectsDataset(
+        image_path=paths['image_path'],
+        dataframe=test_df,
+        transform=transform
+    )
 
-    model = ConvNet(n_classes=params['n_classes']).to(device)
+    train_data_loader = DataLoader(
+        train_subject_dataset, 
+        batch_size=params['batch_size'],
+        shuffle=True
+    )
+
+    test_data_loader = DataLoader(
+        test_subject_dataset, 
+        batch_size=params['batch_size'],
+        shuffle=False
+    )    
+
+    model = ConvNet(n_classes=n_classes).to(device)
     loss_fn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=params['lr'])
 
-    model, logs = full_train(
-        model=model, train_loader=data_loader, val_loader=data_loader,
+    model, train_losses, eval_losses = full_train(
+        model=model, train_loader=train_data_loader, val_loader=test_data_loader,
         optimizer=optimizer, loss_fn=loss_fn, n_epochs=params['n_epochs'], 
-        batch_size=params['batch_size'], device=device
+        batch_size=params['batch_size'], device=device, save_path=paths['save_path']
     )
 
-    plt.plot(range(len(logs['train_loss'])), logs['train_loss'])
+    plt.plot(range(train_losses), train_losses, label='train_loss')
+    plt.plot(range(eval_losses), eval_losses, label='eval_loss')
+    plt.legend()
+    plt.grid(True)
     plt.show()
+

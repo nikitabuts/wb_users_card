@@ -32,4 +32,4 @@ def run(nmid, path):
     get_img(nmid, path)
     get_description(nmid, path)
 
-run(list(range(11290562, 11290562 + 10000)), path=r"C:\Users\Buc.Nikita\Desktop\wb_images\data\files_")
+#run(list(range(11290562, 11290562 + 10000)), path=r"C:\Users\Buc.Nikita\Desktop\wb_images\data\files_")
